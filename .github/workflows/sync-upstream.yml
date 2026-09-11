@@ -1,0 +1,21 @@
+name: Sync Upstream
+'on':
+  schedule:
+  - cron: 7 * * * *
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Compare without pushing
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency:
+  group: sync-upstream-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  sync:
+    uses: Murmansk-Seer/.github/.github/workflows/sync-identical-reusable.yml@d3b692a474211875145305609c63205a287e738f
+    with:
+      implementation_ref: d3b692a474211875145305609c63205a287e738f
+      dry_run: ${{ inputs.dry_run == true }}
