@@ -1,0 +1,39 @@
+name: Reconcile identical upstream content
+on:
+  workflow_call:
+    inputs:
+      implementation_ref:
+        description: Immutable commit containing the sync script
+        required: true
+        type: string
+      dry_run:
+        default: false
+        type: boolean
+    outputs:
+      status:
+        value: ${{ jobs.sync.outputs.status }}
+permissions:
+  contents: write
+jobs:
+  sync:
+    if: github.repository_owner == 'Murmansk-Seer'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    outputs:
+      status: ${{ steps.sync.outputs.status }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: Murmansk-Seer/.github
+          ref: ${{ inputs.implementation_ref }}
+          persist-credentials: false
+      - name: Configure repository-scoped Git authentication
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh auth setup-git
+      - name: Compare and reconcile unchanged file tree
+        id: sync
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: python3 scripts/sync_identical.py
