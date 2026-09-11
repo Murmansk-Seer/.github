@@ -2,6 +2,29 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch, MagicMock
+
+
+class Cleanup(unittest.TestCase):
+    def test_cleanup_failure_is_warning(self):
+        with patch.object(sync.tempfile, "TemporaryDirectory") as factory, patch("builtins.print") as output:
+            factory.return_value.name = "scratch"
+            factory.return_value.cleanup.side_effect = OSError("Directory not empty")
+            with sync.scratch_directory() as path:
+                self.assertEqual(path, "scratch")
+            self.assertIn("::warning::", output.call_args.args[0])
+
+    def test_cleanup_preserves_original_error(self):
+        with patch.object(sync.tempfile, "TemporaryDirectory") as factory, patch("builtins.print"):
+            factory.return_value.cleanup.side_effect = OSError("Directory not empty")
+            with self.assertRaisesRegex(ValueError, "original"):
+                with sync.scratch_directory():
+                    raise ValueError("original")
+
+    def test_git_disables_background_maintenance(self):
+        with patch.object(sync, "run") as run:
+            sync.git(None, "clone", "example", "target")
+            self.assertEqual(run.call_args.args[:5], ("git", "-c", "gc.auto=0", "-c", "maintenance.auto=false"))
 
 spec = importlib.util.spec_from_file_location("sync", Path(__file__).parents[1] / "scripts/sync_identical.py")
 sync = importlib.util.module_from_spec(spec)

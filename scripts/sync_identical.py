@@ -4,6 +4,21 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+from contextlib import contextmanager
+
+
+@contextmanager
+def scratch_directory():
+    temporary = tempfile.TemporaryDirectory(prefix="identical-fork-")
+    try:
+        yield temporary.name
+    finally:
+        try:
+            temporary.cleanup()
+        except OSError as error:
+            # The hosted runner discards this scratch directory after the job.
+            # Cleanup must not replace a successful result or the real exception.
+            print(f"::warning::Scratch cleanup failed: {error}")
 
 
 def run(*args, cwd=None, check=True, input=None):
@@ -12,7 +27,8 @@ def run(*args, cwd=None, check=True, input=None):
 
 
 def git(repo, *args, check=True, input=None):
-    return run("git", *args, cwd=repo, check=check, input=input)
+    return run("git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+               *args, cwd=repo, check=check, input=input)
 
 
 def candidate(repo, fork, upstream):
@@ -53,9 +69,9 @@ def main():
     branch = info["default_branch"]
     upstream_branch = parent["default_branch"]
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
-    with tempfile.TemporaryDirectory(prefix="identical-fork-") as directory:
+    with scratch_directory() as directory:
         repo = str(Path(directory) / "repo.git")
-        run("git", "clone", "--bare", "--filter=blob:none", "--single-branch",
+        git(None, "clone", "--bare", "--filter=blob:none", "--single-branch",
             "--branch", branch, "https://github.com/" + name + ".git", repo)
         git(repo, "config", "user.name", "github-actions[bot]")
         git(repo, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")

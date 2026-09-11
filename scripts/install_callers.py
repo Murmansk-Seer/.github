@@ -26,6 +26,19 @@ def gh(*args, payload=None, check=True):
 
 
 def caller(name, ref, old, minute):
+    if old:
+        # Upgrade installed callers in place, preserving custom refresh jobs,
+        # schedules, permissions, and concurrency settings.
+        previous = yaml.safe_load(old)
+        existing = previous.get("jobs", {}).get("sync", {})
+        prefix = "Murmansk-Seer/.github/.github/workflows/sync-identical-reusable.yml@"
+        if existing.get("uses", "").startswith(prefix):
+            existing["uses"] = prefix + ref
+            existing["with"]["implementation_ref"] = ref
+            # SafeLoader interprets the YAML 1.1 key 'on' as True.
+            if True in previous:
+                previous["on"] = previous.pop(True)
+            return yaml.dump(previous, Dumper=WorkflowDumper, sort_keys=False, allow_unicode=True, width=120)
     invoke = {
         "uses": f"Murmansk-Seer/.github/.github/workflows/sync-identical-reusable.yml@{ref}",
         "with": {"implementation_ref": ref, "dry_run": "${{ inputs.dry_run == true }}"},
