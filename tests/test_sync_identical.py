@@ -45,8 +45,8 @@ class Trees(unittest.TestCase):
         entries = []
         for path, content in sorted(files.items()):
             blob = sync.git(self.repo, "hash-object", "-w", "--stdin", input=content).stdout.strip()
-            entries.append(f"100644 blob {blob}\t{path}\n")
-        tree = sync.git(self.repo, "mktree", input="".join(entries)).stdout.strip()
+            entries.append(f"100644 blob {blob}\t{path}\0")
+        tree = sync.git(self.repo, "mktree", "-z", input="".join(entries)).stdout.strip()
         args = ["commit-tree", tree]
         for parent in parents:
             args.extend(["-p", parent])
@@ -62,6 +62,23 @@ class Trees(unittest.TestCase):
     def test_upstream_new_content_requires_review(self):
         upstream = self.commit({"asset": "new"}, [self.base])
         self.assertEqual(sync.candidate(self.repo, self.base, upstream)[0], "content_changed")
+
+    def test_reviewed_overlay_accepts_upstream_and_preserves_fork_admin(self):
+        upstream = self.commit({"asset": "upstream", "manifest": "complete"}, [self.base])
+        fork = self.commit({"asset": "fork", "manifest": "partial", ".github": "workflow"}, [self.base])
+        status, tree = sync.candidate(self.repo, fork, upstream, (".github",))
+        self.assertEqual(status, "upstream_overlay")
+        expected = self.commit(
+            {"asset": "upstream", "manifest": "complete", ".github": "workflow"},
+            [],
+        )
+        self.assertEqual(tree, sync.git(self.repo, "rev-parse", expected + "^{tree}").stdout.strip())
+
+    def test_reviewed_overlay_rejects_nested_preserved_path(self):
+        upstream = self.commit({"asset": "upstream"}, [self.base])
+        fork = self.commit({"asset": "fork", ".github": "workflow"}, [self.base])
+        with self.assertRaisesRegex(ValueError, "Invalid preserved"):
+            sync.candidate(self.repo, fork, upstream, (".github/workflows",))
 
     def test_conflicting_content(self):
         upstream = self.commit({"asset": "upstream"}, [self.base])

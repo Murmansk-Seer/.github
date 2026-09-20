@@ -7,6 +7,15 @@ import tempfile
 from contextlib import contextmanager
 
 
+# Generated asset repositories may independently publish the same weekly data,
+# which makes their histories diverge even when the asset tree is compatible.
+# For these explicitly reviewed repositories, upstream owns the generated tree
+# while the fork keeps only the listed top-level administration paths.
+UPSTREAM_OVERLAY_POLICIES = {
+    "Murmansk-Seer/seer-unity-assets-pet_anim_part": (".github",),
+}
+
+
 @contextmanager
 def scratch_directory():
     temporary = tempfile.TemporaryDirectory(prefix="identical-fork-")
@@ -31,13 +40,40 @@ def git(repo, *args, check=True, input=None):
                *args, cwd=repo, check=check, input=input)
 
 
-def candidate(repo, fork, upstream):
+def overlay_tree(repo, fork, upstream, preserved_paths):
+    """Build the upstream root tree while retaining reviewed fork paths."""
+    entries = {}
+    for line in git(repo, "ls-tree", "-z", upstream + "^{tree}").stdout.split("\0"):
+        if not line:
+            continue
+        metadata, path = line.split("\t", 1)
+        entries[path] = (metadata, path)
+    fork_entries = {}
+    for line in git(repo, "ls-tree", "-z", fork + "^{tree}").stdout.split("\0"):
+        if not line:
+            continue
+        metadata, path = line.split("\t", 1)
+        fork_entries[path] = (metadata, path)
+    for path in preserved_paths:
+        if "/" in path or path not in fork_entries:
+            raise ValueError(f"Invalid preserved top-level path: {path}")
+        entries[path] = fork_entries[path]
+    payload = "".join(
+        f"{metadata}\t{path}\0"
+        for metadata, path in (entries[path] for path in sorted(entries))
+    )
+    return git(repo, "mktree", "-z", input=payload).stdout.strip()
+
+
+def candidate(repo, fork, upstream, preserved_paths=()):
     """Return (status, tree). Compare complete Git trees including file modes."""
     if git(repo, "merge-base", "--is-ancestor", upstream, fork,
            check=False).returncode == 0:
         return "current", None
     if git(repo, "merge-base", fork, upstream, check=False).returncode != 0:
         return "unrelated", None
+    if preserved_paths:
+        return "upstream_overlay", overlay_tree(repo, fork, upstream, preserved_paths)
     result = git(repo, "merge-tree", "--write-tree", fork, upstream, check=False)
     if result.returncode:
         return "conflict", None
@@ -79,8 +115,12 @@ def main():
             f"refs/heads/{upstream_branch}:refs/audit/upstream")
         fork = git(repo, "rev-parse", f"refs/heads/{branch}").stdout.strip()
         upstream = git(repo, "rev-parse", "refs/audit/upstream").stdout.strip()
-        status, tree = candidate(repo, fork, upstream)
+        preserved_paths = UPSTREAM_OVERLAY_POLICIES.get(name, ())
+        status, tree = candidate(repo, fork, upstream, preserved_paths)
         details = dict(repository=name, parent=parent["full_name"], fork=fork, upstream=upstream)
+        if preserved_paths:
+            details["strategy"] = "upstream_overlay"
+            details["preserved_paths"] = list(preserved_paths)
         if status in {"conflict", "unrelated", "content_changed"}:
             report(status, **details, reason="Manual review required; no reference was updated.")
             return 1
@@ -93,8 +133,10 @@ def main():
         if current != fork:
             report("deferred", **details, reason="Fork advanced; next run will compare again.")
             return 0
+        message = ("Sync upstream generated content\n" if status == "upstream_overlay"
+                   else "Sync identical upstream content\n")
         commit = git(repo, "commit-tree", tree, "-p", fork, "-p", upstream,
-                     input="Sync identical upstream content\n").stdout.strip()
+                     input=message).stdout.strip()
         git(repo, "push", "origin", f"{commit}:refs/heads/{branch}")
         published = run("git", "ls-remote", "https://github.com/" + name + ".git",
                         f"refs/heads/{branch}").stdout.split()[0]
