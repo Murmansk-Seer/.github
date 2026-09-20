@@ -62,7 +62,9 @@ def overlay_tree(repo, fork, upstream, preserved_paths):
         f"{metadata}\t{path}\0"
         for metadata, path in (entries[path] for path in sorted(entries))
     )
-    return git(repo, "mktree", "-z", input=payload).stdout.strip()
+    # The sync clone deliberately uses blob:none; all referenced object IDs are
+    # trusted entries from the two fetched trees and need not be downloaded.
+    return git(repo, "mktree", "--missing", "-z", input=payload).stdout.strip()
 
 
 def candidate(repo, fork, upstream, preserved_paths=()):
