@@ -85,6 +85,46 @@ class Trees(unittest.TestCase):
         fork = self.commit({"asset": "fork"}, [self.base])
         self.assertEqual(sync.candidate(self.repo, fork, upstream)[0], "conflict")
 
+    def test_fork_owned_generated_change_only_absorbs_ancestry(self):
+        upstream = self.commit({"asset": "upstream"}, [self.base])
+        fork = self.commit({"asset": "fork", "custom": "keep"}, [self.base])
+        status, tree = sync.candidate(
+            self.repo, fork, upstream, fork_owned_patterns=("asset",)
+        )
+        self.assertEqual(status, "fork_owned_generated")
+        self.assertEqual(
+            tree, sync.git(self.repo, "rev-parse", fork + "^{tree}").stdout.strip()
+        )
+
+    def test_fork_owned_policy_does_not_hide_code_changes(self):
+        upstream = self.commit({"asset": "upstream", "code": "new"}, [self.base])
+        fork = self.commit({"asset": "fork"}, [self.base])
+        self.assertNotEqual(
+            sync.candidate(
+                self.repo, fork, upstream, fork_owned_patterns=("asset",)
+            )[0],
+            "fork_owned_generated",
+        )
+
+    def test_fork_owned_policy_matches_only_reviewed_paths(self):
+        policies = sync.FORK_OWNED_GENERATED_POLICIES
+        examples = {
+            "Murmansk-Seer/api-data": "data/v1/data/metadata.json",
+            "Murmansk-Seer/seer-unity-config-parser": "json/effectIcon.json",
+            "Murmansk-Seer/seer-unity-preview-img-dumper": "img/preview.png",
+            "Murmansk-Seer/seer-unity-assets": "package-manifests/DefaultPackage.json",
+        }
+        for name, path in examples.items():
+            with self.subTest(repository=name):
+                self.assertTrue(
+                    sync._is_fork_owned_generated_path(path, policies[name])
+                )
+                self.assertFalse(
+                    sync._is_fork_owned_generated_path(
+                        ".github/workflows/sync-upstream.yml", policies[name]
+                    )
+                )
+
     def test_delete_modify_conflict(self):
         upstream = self.commit({}, [self.base])
         fork = self.commit({"asset": "fork"}, [self.base])
