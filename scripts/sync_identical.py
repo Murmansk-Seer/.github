@@ -110,7 +110,11 @@ def candidate(repo, fork, upstream, preserved_paths=(), fork_owned_patterns=()):
     original = git(repo, "rev-parse", fork + "^{tree}").stdout.strip()
     if fork_owned_patterns:
         base = git(repo, "merge-base", fork, upstream).stdout.strip()
-        changed = git(repo, "diff", "--name-only", "-z", base, upstream).stdout
+        # Include both sides of a rename, so moving code into an allowlisted
+        # generated directory cannot hide the removed source path.
+        changed = git(
+            repo, "diff", "--no-renames", "--name-only", "-z", base, upstream
+        ).stdout
         upstream_paths = tuple(path for path in changed.split("\0") if path)
         if upstream_paths and all(
             _is_fork_owned_generated_path(path, fork_owned_patterns)

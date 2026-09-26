@@ -125,6 +125,17 @@ class Trees(unittest.TestCase):
                     )
                 )
 
+    def test_fork_owned_policy_rejects_code_renamed_into_generated_path(self):
+        base = self.commit({"code": "same"}, [self.base])
+        upstream = self.commit({"generated": "same"}, [base])
+        fork = self.commit({"code": "same", "local": "keep"}, [base])
+        self.assertNotEqual(
+            sync.candidate(
+                self.repo, fork, upstream, fork_owned_patterns=("generated",)
+            )[0],
+            "fork_owned_generated",
+        )
+
     def test_delete_modify_conflict(self):
         upstream = self.commit({}, [self.base])
         fork = self.commit({"asset": "fork"}, [self.base])
