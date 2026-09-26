@@ -10,6 +10,15 @@ Fork-only custom files survive. Actual content changes, conflicts and unrelated
 histories fail with an Actions summary for manual review. JSON semantic equality,
 newer timestamps or a superset of manifest entries are not automatic overrides.
 
+Four reviewed data-generating forks have narrow, fork-owned generated-path
+policies. When every upstream change since the merge base is within that
+repository's allowlist, the job merges upstream ancestry while retaining the
+fork's entire current tree. It never copies upstream generated files over the
+fork's release. Code, workflow, and other non-allowlisted data changes still
+fail for review. The policies are in `scripts/sync_identical.py`; additions
+require an explicit review and tests. This keeps routine independent snapshots
+from causing hourly conflict notifications without enabling a blanket merge.
+
 Pushes use only the caller's GITHUB_TOKEN and never force-update a branch. No
 cross-repository secret is required. Permission/protection failures are reported
 as failed jobs. Concurrent source writers are preserved; the next hourly run

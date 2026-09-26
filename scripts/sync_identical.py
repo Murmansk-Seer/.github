@@ -15,6 +15,30 @@ UPSTREAM_OVERLAY_POLICIES = {
     "Murmansk-Seer/seer-unity-assets-pet_anim_part": (".github",),
 }
 
+# These forks publish their own generated snapshots. Their upstream's routine
+# snapshot updates may differ byte-for-byte without changing the fork's data.
+# Absorb ancestry only when *every* upstream change is in the reviewed list;
+# code and unlisted data changes still require a manual merge.
+FORK_OWNED_GENERATED_POLICIES = {
+    "Murmansk-Seer/api-data": (
+        "data/v1/data/metadata.json",
+        "data/v1/sharded_data/metadata.json",
+    ),
+    "Murmansk-Seer/seer-unity-config-parser": (
+        "cache/last-release-hashes.json",
+        "json/",
+    ),
+    "Murmansk-Seer/seer-unity-preview-img-dumper": (
+        "DefaultPackage/PackageManifest_DefaultPackage.json",
+        "DefaultPackage/game_ui_activitylistpreview",
+        "img/",
+    ),
+    "Murmansk-Seer/seer-unity-assets": (
+        "newseer/",
+        "package-manifests/",
+    ),
+}
+
 
 @contextmanager
 def scratch_directory():
@@ -67,7 +91,14 @@ def overlay_tree(repo, fork, upstream, preserved_paths):
     return git(repo, "mktree", "--missing", "-z", input=payload).stdout.strip()
 
 
-def candidate(repo, fork, upstream, preserved_paths=()):
+def _is_fork_owned_generated_path(path, patterns):
+    return any(
+        path.startswith(pattern) if pattern.endswith("/") else path == pattern
+        for pattern in patterns
+    )
+
+
+def candidate(repo, fork, upstream, preserved_paths=(), fork_owned_patterns=()):
     """Return (status, tree). Compare complete Git trees including file modes."""
     if git(repo, "merge-base", "--is-ancestor", upstream, fork,
            check=False).returncode == 0:
@@ -76,11 +107,20 @@ def candidate(repo, fork, upstream, preserved_paths=()):
         return "unrelated", None
     if preserved_paths:
         return "upstream_overlay", overlay_tree(repo, fork, upstream, preserved_paths)
+    original = git(repo, "rev-parse", fork + "^{tree}").stdout.strip()
+    if fork_owned_patterns:
+        base = git(repo, "merge-base", fork, upstream).stdout.strip()
+        changed = git(repo, "diff", "--name-only", "-z", base, upstream).stdout
+        upstream_paths = tuple(path for path in changed.split("\0") if path)
+        if upstream_paths and all(
+            _is_fork_owned_generated_path(path, fork_owned_patterns)
+            for path in upstream_paths
+        ):
+            return "fork_owned_generated", original
     result = git(repo, "merge-tree", "--write-tree", fork, upstream, check=False)
     if result.returncode:
         return "conflict", None
     tree = result.stdout.splitlines()[0].strip()
-    original = git(repo, "rev-parse", fork + "^{tree}").stdout.strip()
     if tree != original:
         return "content_changed", None
     return "identical", tree
@@ -118,11 +158,16 @@ def main():
         fork = git(repo, "rev-parse", f"refs/heads/{branch}").stdout.strip()
         upstream = git(repo, "rev-parse", "refs/audit/upstream").stdout.strip()
         preserved_paths = UPSTREAM_OVERLAY_POLICIES.get(name, ())
-        status, tree = candidate(repo, fork, upstream, preserved_paths)
+        fork_owned_patterns = FORK_OWNED_GENERATED_POLICIES.get(name, ())
+        status, tree = candidate(
+            repo, fork, upstream, preserved_paths, fork_owned_patterns
+        )
         details = dict(repository=name, parent=parent["full_name"], fork=fork, upstream=upstream)
         if preserved_paths:
             details["strategy"] = "upstream_overlay"
             details["preserved_paths"] = list(preserved_paths)
+        if fork_owned_patterns:
+            details["fork_owned_generated_patterns"] = list(fork_owned_patterns)
         if status in {"conflict", "unrelated", "content_changed"}:
             report(status, **details, reason="Manual review required; no reference was updated.")
             return 1
@@ -135,8 +180,11 @@ def main():
         if current != fork:
             report("deferred", **details, reason="Fork advanced; next run will compare again.")
             return 0
-        message = ("Sync upstream generated content\n" if status == "upstream_overlay"
-                   else "Sync identical upstream content\n")
+        message = (
+            "Sync upstream generated content\n" if status == "upstream_overlay"
+            else "Sync fork-owned generated ancestry\n" if status == "fork_owned_generated"
+            else "Sync identical upstream content\n"
+        )
         commit = git(repo, "commit-tree", tree, "-p", fork, "-p", upstream,
                      input=message).stdout.strip()
         git(repo, "push", "origin", f"{commit}:refs/heads/{branch}")
