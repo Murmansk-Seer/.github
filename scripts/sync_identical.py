@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 from contextlib import contextmanager
 
 
@@ -21,8 +22,8 @@ UPSTREAM_OVERLAY_POLICIES = {
 # code and unlisted data changes still require a manual merge.
 FORK_OWNED_GENERATED_POLICIES = {
     "Murmansk-Seer/api-data": (
-        "data/v1/data/metadata.json",
-        "data/v1/sharded_data/metadata.json",
+        "data/v1/data/",
+        "data/v1/sharded_data/",
     ),
     "Murmansk-Seer/seer-unity-config-parser": (
         "cache/last-release-hashes.json",
@@ -54,14 +55,42 @@ def scratch_directory():
             print(f"::warning::Scratch cleanup failed: {error}")
 
 
-def run(*args, cwd=None, check=True, input=None):
+def run(*args, cwd=None, check=True, input=None, env=None):
     return subprocess.run(args, cwd=cwd, input=input, text=True,
-                          encoding="utf-8", capture_output=True, check=check)
+                          encoding="utf-8", capture_output=True, check=check, env=env)
 
 
-def git(repo, *args, check=True, input=None):
+def git(repo, *args, check=True, input=None, env=None):
     return run("git", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
-               *args, cwd=repo, check=check, input=input)
+               *args, cwd=repo, check=check, input=input, env=env)
+
+
+def network(*args, cwd=None):
+    for attempt in range(1, 4):
+        result = run(*args, cwd=cwd, check=False)
+        if result.returncode == 0:
+            return result
+        print(f"::warning::Network attempt {attempt}/3 failed: {result.stderr}")
+        if attempt < 3:
+            time.sleep(attempt * 2)
+    raise RuntimeError(result.stderr)
+
+
+def publish_candidate(repo, name, branch, fork, commit):
+    url = "https://github.com/" + name + ".git"
+    for attempt in range(1, 4):
+        current = network("git", "ls-remote", url, f"refs/heads/{branch}").stdout.split()[0]
+        if current == commit:
+            return commit
+        if current != fork:
+            return None
+        pushed = git(repo, "push", "origin", f"{commit}:refs/heads/{branch}", check=False)
+        if pushed.returncode == 0:
+            return network("git", "ls-remote", url, f"refs/heads/{branch}").stdout.split()[0]
+        print(f"::warning::Push attempt {attempt}/3 failed: {pushed.stderr}")
+        if attempt == 3:
+            raise RuntimeError(pushed.stderr)
+        time.sleep(attempt * 2)
 
 
 def overlay_tree(repo, fork, upstream, preserved_paths):
@@ -143,7 +172,7 @@ def report(status, **details):
 
 def main():
     name = os.environ["GITHUB_REPOSITORY"]
-    info = json.loads(run("gh", "api", f"repos/{name}").stdout)
+    info = json.loads(network("gh", "api", f"repos/{name}").stdout)
     if info.get("archived") or not info.get("fork") or not info.get("parent"):
         report("skipped", repository=name, reason="archived or no fork parent")
         return 0
@@ -153,12 +182,12 @@ def main():
     dry_run = os.environ.get("DRY_RUN", "true").lower() == "true"
     with scratch_directory() as directory:
         repo = str(Path(directory) / "repo.git")
-        git(None, "clone", "--bare", "--filter=blob:none", "--single-branch",
+        network("git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "clone", "--bare", "--filter=blob:none", "--single-branch",
             "--branch", branch, "https://github.com/" + name + ".git", repo)
         git(repo, "config", "user.name", "github-actions[bot]")
         git(repo, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
-        git(repo, "fetch", "--filter=blob:none", "https://github.com/" + parent["full_name"] + ".git",
-            f"refs/heads/{upstream_branch}:refs/audit/upstream")
+        network("git", "-c", "gc.auto=0", "-c", "maintenance.auto=false", "fetch", "--filter=blob:none", "https://github.com/" + parent["full_name"] + ".git",
+            f"refs/heads/{upstream_branch}:refs/audit/upstream", cwd=repo)
         fork = git(repo, "rev-parse", f"refs/heads/{branch}").stdout.strip()
         upstream = git(repo, "rev-parse", "refs/audit/upstream").stdout.strip()
         preserved_paths = UPSTREAM_OVERLAY_POLICIES.get(name, ())
@@ -167,19 +196,31 @@ def main():
             repo, fork, upstream, preserved_paths, fork_owned_patterns
         )
         details = dict(repository=name, parent=parent["full_name"], fork=fork, upstream=upstream)
+        from sync_reviewed import reviewed_candidate, validate_parser
+        reviewed = reviewed_candidate(repo, fork, upstream, name)
+        if reviewed is not None:
+            status, tree, policy_details = reviewed
+            details.update(policy_details)
         if preserved_paths:
             details["strategy"] = "upstream_overlay"
             details["preserved_paths"] = list(preserved_paths)
         if fork_owned_patterns:
             details["fork_owned_generated_patterns"] = list(fork_owned_patterns)
-        if status in {"conflict", "unrelated", "content_changed"}:
+        if status in {"conflict", "unrelated", "content_changed", "version_ambiguous"}:
             report(status, **details, reason="Manual review required; no reference was updated.")
             return 1
+        if status == "parser_candidate":
+            try:
+                tree, validation = validate_parser(repo, tree, fork, upstream, directory)
+                details["validation"] = validation
+            except Exception as error:
+                report("validation_failed", **details, reason=str(error))
+                return 1
         if status == "current" or dry_run:
             report(status if status == "current" else "would_merge", **details)
             return 0
         # Never force-push: a concurrent update makes the ordinary push fail.
-        current = run("git", "ls-remote", "https://github.com/" + name + ".git",
+        current = network("git", "ls-remote", "https://github.com/" + name + ".git",
                       f"refs/heads/{branch}").stdout.split()[0]
         if current != fork:
             report("deferred", **details, reason="Fork advanced; next run will compare again.")
@@ -191,9 +232,10 @@ def main():
         )
         commit = git(repo, "commit-tree", tree, "-p", fork, "-p", upstream,
                      input=message).stdout.strip()
-        git(repo, "push", "origin", f"{commit}:refs/heads/{branch}")
-        published = run("git", "ls-remote", "https://github.com/" + name + ".git",
-                        f"refs/heads/{branch}").stdout.split()[0]
+        published = publish_candidate(repo, name, branch, fork, commit)
+        if published is None:
+            report("deferred", **details, reason="Fork advanced; candidate must be revalidated.")
+            return 0
         report("merged", **details, commit=commit, observed_remote=published, tree=tree)
     return 0
 
