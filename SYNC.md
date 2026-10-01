@@ -29,3 +29,24 @@ its separate official gems refresh and downstream dispatch stages, gated after a
 successful safe sync. No upstream merge remains in the source-refresh stage.
 
 Run tests: `python -m unittest discover -s tests`.
+
+Reviewed extensions for config-sources, api-data, and seer-unity-config-parser:
+
+- config-sources accepts only upstream changes in flash/ and unity/. Unity
+  numeric versions must not roll back. Flash updates require the fork hash to
+  match the merge base or upstream hash. The fork's gems, partner contracts,
+  parse status, administration files, and unique files survive.
+- api-data owns data/v1/data/ and data/v1/sharded_data/. Routine upstream
+  snapshots absorb ancestry without overwriting fork-generated output. Other
+  paths still require review; fork builds regenerate output from fork sources.
+- Existing registered bytes2json/*.ts parser updates can merge only without
+  code conflicts. Before pushing, a temporary checkout installs locked
+  dependencies, downloads one official ConfigPackage snapshot, checks its
+  bundle hash, exports, parses, and validates JSON. Caught parse errors fail the
+  candidate even if the original parser returned zero. Only json/ and the
+  release-hash cache can enter the resulting generated tree. Workflow, utility,
+  dependency, deletion, and unregistered parser changes require review.
+
+Dry runs validate candidates but do not push. Remote branch advancement discards
+the candidate; a later run must prepare and validate again. Network operations
+and pushes each have at most three total attempts, without force pushes.

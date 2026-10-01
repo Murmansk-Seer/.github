@@ -18,7 +18,7 @@ jobs:
   sync:
     if: github.repository_owner == 'Murmansk-Seer'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 40
     outputs:
       status: ${{ steps.sync.outputs.status }}
     steps:
@@ -31,6 +31,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh auth setup-git
+      - uses: pnpm/action-setup@v4
+        if: github.repository == 'Murmansk-Seer/seer-unity-config-parser'
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        if: github.repository == 'Murmansk-Seer/seer-unity-config-parser'
+        with:
+          node-version: 20
+      - uses: actions/setup-python@v5
+        if: github.repository == 'Murmansk-Seer/seer-unity-config-parser'
+        with:
+          python-version: '3.11'
       - name: Compare and reconcile unchanged file tree
         id: sync
         env:
