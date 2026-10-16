@@ -69,6 +69,8 @@ def reviewed_candidate(repo, fork, upstream, name):
         if not all(path.startswith(("unity/", "flash/")) for path in paths):
             return "content_changed", None, details
         updates = {}
+        reused_paths = []
+        validated_paths = []
         versions = {}
         for package in ("unity", "flash"):
             selected = [path for path in paths if path.startswith(package + "/")]
@@ -93,17 +95,29 @@ def reviewed_candidate(repo, fork, upstream, name):
                     if path in PROTECTED_CONFIG:
                         continue
                     value = incoming.get(path)
+                    # Compare both mode and blob: identical official snapshots may
+                    # already be present without their upstream commit history.
+                    if value == original.get(path):
+                        reused_paths.append(path)
+                        continue
                     if value:
                         if value[0] != "100644":
                             raise ValueError(f"Unexpected config file mode: {path}")
                         raw = content(repo, upstream, path)
-                        if path.endswith(".json"):
-                            json.loads(raw)
-                        elif path.endswith(".xml"):
-                            ET.fromstring(raw)
+                        try:
+                            if path.endswith(".json"):
+                                json.loads(raw)
+                            elif path.endswith(".xml"):
+                                ET.fromstring(raw)
+                        except (json.JSONDecodeError, ET.ParseError) as exc:
+                            raise ValueError(f"Invalid incoming config {path}: {exc}") from exc
+                        validated_paths.append(path)
                     updates[path] = value
         tree = edit_tree(repo, fork, updates)
-        return "config_snapshot", tree, {**details, "versions": versions, "validation": "JSON/XML parsed"}
+        return "config_snapshot", tree, {
+            **details, "versions": versions, "validation": "Changed JSON/XML parsed",
+            "reused_paths": reused_paths, "validated_paths": validated_paths,
+        }
 
     details["strategy"] = "validated_parser_merge"
     source_paths = [path for path in paths if not is_generated(path)]

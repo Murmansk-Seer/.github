@@ -63,6 +63,48 @@ class ReviewedTrees(unittest.TestCase):
     def test_unknown_flash_version_blocks_candidate(self):
         self.assertEqual(self.config(flash_local="different")[0], "version_ambiguous")
 
+    def snapshot(self, fork_files, incoming_files):
+        versions = {"unity/.version": "1", "flash/.version": "base"}
+        base = self.commit(versions)
+        fork = self.commit({**versions, "fork-only.txt": "preserve", **fork_files}, [base])
+        upstream = self.commit({**versions, **incoming_files}, [base])
+        result = reviewed.reviewed_candidate(self.repo, fork, upstream, "Murmansk-Seer/config-sources")
+        return fork, upstream, result
+
+    def test_identical_official_xml_reuses_blob_without_revalidation(self):
+        path = "flash/config.xml.HelpTipXMLInfo_helpTip.xml"
+        raw = '<root><tip>幻境界皇&时空界皇</tip></root>'
+        fork, _, (_, tree, details) = self.snapshot({path: raw}, {path: raw})
+        self.assertEqual(tree, sync.git(self.repo, "rev-parse", fork + "^{tree}").stdout.strip())
+        self.assertIn(path, details["reused_paths"])
+        self.assertNotIn(path, details["validated_paths"])
+
+    def test_changed_invalid_xml_blocks_with_path_and_original_cause(self):
+        path = "flash/help.xml"
+        with self.assertRaisesRegex(ValueError, "Invalid incoming config flash/help.xml") as caught:
+            self.snapshot({path: "<root/>"}, {path: "<root>a&b</root>"})
+        self.assertIsInstance(caught.exception.__cause__, reviewed.ET.ParseError)
+
+    def test_new_malformed_xml_blocks(self):
+        with self.assertRaisesRegex(ValueError, "flash/new.xml"):
+            self.snapshot({}, {"flash/new.xml": "<root><broken></root>"})
+
+    def test_valid_changed_xml_and_json_are_validated(self):
+        _, _, (_, tree, details) = self.snapshot(
+            {"flash/help.xml": "<root/>", "unity/help.json": "{}"},
+            {"flash/help.xml": "<root>a&amp;b</root>", "unity/help.json": '{"ok":true}'},
+        )
+        self.assertEqual(reviewed.content(self.repo, tree, "flash/help.xml"), "<root>a&amp;b</root>")
+        self.assertEqual(set(details["validated_paths"]), {"flash/help.xml", "unity/help.json"})
+
+    def test_changed_invalid_json_blocks(self):
+        with self.assertRaisesRegex(ValueError, "unity/help.json"):
+            self.snapshot({"unity/help.json": "{}"}, {"unity/help.json": "{"})
+
+    def test_unchanged_invalid_file_does_not_hide_changed_invalid_file(self):
+        with self.assertRaisesRegex(ValueError, "flash/z.xml"):
+            self.snapshot({"flash/a.xml": "a&b"}, {"flash/a.xml": "a&b", "flash/z.xml": "<broken>"})
+
     def test_api_generated_conflict_keeps_fork_tree(self):
         base = self.commit({"data/v1/data/skill/1/index.json": "{}"})
         fork = self.commit({"data/v1/data/skill/1/index.json": '{"fork":1}', "custom": "keep"}, [base])
