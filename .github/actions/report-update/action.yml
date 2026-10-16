@@ -1,0 +1,29 @@
+name: Report update outcome
+description: Distinguish unchanged checks from committed updates and verified publications
+inputs:
+  jobs:
+    required: true
+    description: JSON needs object
+  evidence:
+    default: '{}'
+    description: JSON containing actual source, parser, publication and dispatch evidence
+  release-tag:
+    default: ''
+    description: Optional release tag for last successful publication information
+outputs:
+  status:
+    value: ${{ steps.report.outputs.status }}
+  label:
+    value: ${{ steps.report.outputs.label }}
+  failed:
+    value: ${{ steps.report.outputs.failed }}
+runs:
+  using: composite
+  steps:
+    - id: report
+      shell: bash
+      env:
+        REPORT_JOBS: ${{ inputs.jobs }}
+        REPORT_EVIDENCE: ${{ inputs.evidence }}
+        REPORT_RELEASE_TAG: ${{ inputs.release-tag }}
+      run: python3 "$GITHUB_ACTION_PATH/report.py"
