@@ -10,6 +10,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 
 from sync_identical import git, network, run
+from flash_xml_validation import validate_flash_xml
 
 GENERATED = ("json/", "cache/last-release-hashes.json")
 PROTECTED_CONFIG = {"unity/gems.json", "unity/partner_contracts.json", "unity/.parse-status.json"}
@@ -71,6 +72,7 @@ def reviewed_candidate(repo, fork, upstream, name):
         updates = {}
         reused_paths = []
         validated_paths = []
+        normalized_files = []
         versions = {}
         for package in ("unity", "flash"):
             selected = [path for path in paths if path.startswith(package + "/")]
@@ -108,8 +110,13 @@ def reviewed_candidate(repo, fork, upstream, name):
                             if path.endswith(".json"):
                                 json.loads(raw)
                             elif path.endswith(".xml"):
-                                ET.fromstring(raw)
-                        except (json.JSONDecodeError, ET.ParseError) as exc:
+                                if package == "flash":
+                                    count = validate_flash_xml(raw)
+                                    if count:
+                                        normalized_files.append({"path": path, "bare_ampersands": count, "original_blob": value[1]})
+                                else:
+                                    ET.fromstring(raw)
+                        except (ValueError, ET.ParseError) as exc:
                             raise ValueError(f"Invalid incoming config {path}: {exc}") from exc
                         validated_paths.append(path)
                     updates[path] = value
@@ -117,6 +124,7 @@ def reviewed_candidate(repo, fork, upstream, name):
         return "config_snapshot", tree, {
             **details, "versions": versions, "validation": "Changed JSON/XML parsed",
             "reused_paths": reused_paths, "validated_paths": validated_paths,
+            "validation_normalizations": normalized_files,
         }
 
     details["strategy"] = "validated_parser_merge"
