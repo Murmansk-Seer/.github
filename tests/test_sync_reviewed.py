@@ -82,12 +82,20 @@ class ReviewedTrees(unittest.TestCase):
     def test_changed_invalid_xml_blocks_with_path_and_original_cause(self):
         path = "flash/help.xml"
         with self.assertRaisesRegex(ValueError, "Invalid incoming config flash/help.xml") as caught:
-            self.snapshot({path: "<root/>"}, {path: "<root>a&b</root>"})
+            self.snapshot({path: "<root/>"}, {path: "<root>&unknown;</root>"})
         self.assertIsInstance(caught.exception.__cause__, reviewed.ET.ParseError)
 
     def test_new_malformed_xml_blocks(self):
         with self.assertRaisesRegex(ValueError, "flash/new.xml"):
             self.snapshot({}, {"flash/new.xml": "<root><broken></root>"})
+
+    def test_flash_normalization_is_validation_only_and_reports_original_blob(self):
+        raw = '<root tips="幻境界皇&时空界皇">1&2</root>'
+        _, upstream, (_, tree, details) = self.snapshot({}, {"flash/help.xml": raw})
+        self.assertEqual(reviewed.content(self.repo, tree, "flash/help.xml"), raw)
+        report = details["validation_normalizations"][0]
+        self.assertEqual(report["bare_ampersands"], 2)
+        self.assertEqual(report["original_blob"], reviewed.entries(self.repo, upstream)["flash/help.xml"][1])
 
     def test_valid_changed_xml_and_json_are_validated(self):
         _, _, (_, tree, details) = self.snapshot(

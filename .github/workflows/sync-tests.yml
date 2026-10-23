@@ -1,0 +1,12 @@
+name: Reviewed sync regression tests
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --no-project --with pyyaml python -m unittest discover -s tests -q
