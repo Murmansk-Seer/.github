@@ -43,10 +43,23 @@ Reviewed extensions for config-sources, api-data, and seer-unity-config-parser:
   code conflicts. Before pushing, a temporary checkout installs locked
   dependencies, downloads one official ConfigPackage snapshot, checks its
   bundle hash, exports, parses, and validates JSON. Caught parse errors fail the
-  candidate even if the original parser returned zero. Only json/ and the
-  release-hash cache can enter the resulting generated tree. Workflow, utility,
+  candidate even if the original parser returned zero. Only validated json/
+  outputs can enter the resulting generated tree. Runtime inventories are not
+  staged: legacy tracked cache blobs remain unchanged, while migrated parsers
+  keep their inventory on pipeline-state. Workflow, utility,
   dependency, deletion, and unregistered parser changes require review.
 
 Dry runs validate candidates but do not push. Remote branch advancement discards
 the candidate; a later run must prepare and validate again. Network operations
 and pushes each have at most three total attempts, without force pushes.
+
+Parser runtime-state boundary / 解析器运行状态边界：
+
+The hourly validator stages validated JSON only. It does not require the removed
+legacy cache path or publish runtime state; weekly state publication remains a
+separate success-gated step. Both cache layouts use the same strict package hash,
+parse and JSON validation gates.
+
+小时校验器仅暂存已验证 JSON，不要求已迁出的旧缓存路径，也不发布运行状态；
+周更状态发布仍由独立成功门控步骤负责。新旧缓存布局均保留配置包哈希、解析与
+JSON 校验保护。

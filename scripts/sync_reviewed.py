@@ -183,7 +183,9 @@ def validate_parser(repo, tree, fork, upstream, directory):
         raise ValueError("Parser produced no JSON files")
     for path in files:
         json.loads(path.read_text(encoding="utf-8"))
-    git(workspace, "add", "--", "json", "cache/last-release-hashes.json")
+    # Runtime inventories belong to pipeline-state, never to a source merge.
+    # Stage validated outputs only; this also accepts legacy cache layouts.
+    git(workspace, "add", "--", "json")
     final_tree = git(workspace, "write-tree").stdout.strip()
     changes = changed_paths(repo, tree, final_tree)
     if any(not is_generated(path) for path in changes):
