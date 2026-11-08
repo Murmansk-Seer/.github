@@ -1,0 +1,17 @@
+name: Isolated pipeline state
+description: Restore and append verified state without rewriting main.
+inputs:
+  mode:
+    required: true
+    description: restore or publish
+  message:
+    required: false
+    default: ''
+    description: Verified state transition
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        STATE_MESSAGE: ${{ inputs.message }}
+      run: python3 "${{ github.action_path }}/pipeline_state.py" --mode "${{ inputs.mode }}"
